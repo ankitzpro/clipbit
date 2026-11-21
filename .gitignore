@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+data/
+rebuild-log.txt
+*.log
+CLAUDE.local.md
