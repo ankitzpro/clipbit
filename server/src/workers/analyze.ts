@@ -15,6 +15,7 @@ import { CATEGORIES, GeminiQuotaError } from '../services/ai/gemini.js';
 import { anyProviderAvailable, detectMoments } from '../services/ai/providers.js';
 import { refineBoundaries, transcriptText } from '../services/ai/boundaries.js';
 import { getLearningProfile } from '../services/learning.js';
+import { computeScore } from '../services/ai/scoring.js';
 import { createClipFromMoment, normalizeTag, sessionTranscript } from '../services/clips.js';
 import type { MomentCandidate, Segment } from '../services/ai/types.js';
 
@@ -91,14 +92,21 @@ export async function processAnalyze(job: Job<AnalyzeJob>, token?: string) {
         candidates = res.moments.map((m) => {
           const peak = chunk.start_sec + (Number.isFinite(m.peak_sec) ? m.peak_sec : (m.start_sec + m.end_sec) / 2);
           const { start, end } = refineBoundaries(chunk.start_sec + m.start_sec, chunk.start_sec + m.end_sec, peak, ctxTranscript, bounds);
-          let score = Math.round(Math.max(0, Math.min(100, m.viral_score)));
+          const category = (CATEGORIES as readonly string[]).includes(m.category) ? m.category : 'other';
+          // evidence-based: AI checklist + measured signals + the owner's star-rating taste (not the AI's own number)
+          const { score: computed, breakdown } = computeScore({
+            evidence: m.evidence, signals, transcript: ctxTranscript, start, end, category,
+            aiGuess: m.viral_score, taste: learning?.categoryStars,
+          });
+          let score = computed;
           if (settings.styles.includes('viral_only')) score = Math.round(score * 0.95);
           return {
             start, end, peak,
             title: String(m.title || 'Untitled moment').slice(0, 95),
             description: String(m.description || ''),
-            category: (CATEGORIES as readonly string[]).includes(m.category) ? m.category : 'other',
+            category,
             score,
+            breakdown,
             hashtags: (m.hashtags || []).map(normalizeTag).filter(Boolean).slice(0, 6),
             keywords: (m.keywords || []).slice(0, 4),
             transcript: m.transcript_excerpt || transcriptText(ctxTranscript, start, end),
@@ -139,9 +147,10 @@ export async function processAnalyze(job: Job<AnalyzeJob>, token?: string) {
       if (c.score < settings.minScore) continue;
       if (existing.some((e) => overlap(e.start_sec, e.end_sec, c.start, c.end) > 0.5)) continue;
       const row = await one<{ id: string }>(
-        `INSERT INTO moments (stream_id, session_id, chunk_id, start_sec, end_sec, peak_sec, title, description, category, score, hashtags, keywords, transcript, detector, mission)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
-        [chunk.stream_id, chunk.session_id, chunk.id, c.start, c.end, c.peak, c.title, c.description, c.category, c.score, c.hashtags, c.keywords, c.transcript, c.detector, mission],
+        `INSERT INTO moments (stream_id, session_id, chunk_id, start_sec, end_sec, peak_sec, title, description, category, score, hashtags, keywords, transcript, detector, mission, score_breakdown)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        [chunk.stream_id, chunk.session_id, chunk.id, c.start, c.end, c.peak, c.title, c.description, c.category, c.score, c.hashtags, c.keywords, c.transcript, c.detector, mission,
+          c.breakdown ? JSON.stringify(c.breakdown) : null],
       );
       existing.push({ id: row!.id, start_sec: c.start, end_sec: c.end, score: c.score });
       created++;

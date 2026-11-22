@@ -21,7 +21,7 @@ import { activeGeminiModel, geminiEnabled, rewriteMetadata } from '../services/a
 import { whisperStatus } from '../services/ai/transcribe.js';
 import { ollamaStatus } from '../services/ai/ollama.js';
 import { anyProviderAvailable, generateJson } from '../services/ai/providers.js';
-import { getLearningProfile } from '../services/learning.js';
+import { getLearningProfile, invalidateLearningProfile } from '../services/learning.js';
 import { buildChatPrompt, chatFrameSheet, enhancePublishMetadata, type PublishContext } from '../services/ai/publishmeta.js';
 import { deleteSavedRecording, deleteStreamRecordings, requestSaveRecording } from '../services/recordings.js';
 import { authUrl, disconnect, getAccount, handleCallback, youtubeConfigured } from '../services/youtube/client.js';
@@ -271,6 +271,30 @@ export async function apiRoutes(app: FastifyInstance) {
     return { items: rows, total: total?.n || 0 };
   });
 
+  // ---------- the owner's own ratings (1-5 ★, null clears) — teach the scorer what they like ----------
+  const starsOf = (b: any): number | null => {
+    if (b?.stars === null || b?.stars === 0) return null;
+    const n = Math.round(Number(b?.stars));
+    if (!(n >= 1 && n <= 5)) throw bad('stars must be 1-5 (or null to clear)');
+    return n;
+  };
+  app.post('/api/moments/:id/rating', async (req: Req<{ stars: number | null }>) => {
+    const stars = starsOf(req.body);
+    const row = await one(`UPDATE moments SET user_rating = $2 WHERE id = $1 RETURNING id`, [idOf(req), stars]);
+    if (!row) throw notFound();
+    invalidateLearningProfile();
+    return { ok: true, stars };
+  });
+  app.post('/api/clips/:id/rating', async (req: Req<{ stars: number | null }>) => {
+    const stars = starsOf(req.body);
+    const row = await one<{ moment_id: string | null }>(`UPDATE clips SET user_rating = $2 WHERE id = $1 RETURNING moment_id`, [idOf(req), stars]);
+    if (!row) throw notFound();
+    // a clip rating is also a rating of its moment (single clips)
+    if (row.moment_id) await q(`UPDATE moments SET user_rating = $2 WHERE id = $1`, [row.moment_id, stars]);
+    invalidateLearningProfile();
+    return { ok: true, stars };
+  });
+
   app.post('/api/moments/:id/clip', async (req: Req) => {
     const clipId = await createClipFromMoment(idOf(req), await getSettings());
     return { clipId };
@@ -366,7 +390,8 @@ export async function apiRoutes(app: FastifyInstance) {
     return q(
       `SELECT c.id, c.status, c.title, c.description, c.hashtags, c.score, c.category, c.duration, c.start_sec, c.end_sec, c.progress, c.error,
               c.created_at, c.updated_at, c.approved_at, c.version, c.kind, c.thumb_key IS NOT NULL AS has_thumb, c.file_key IS NOT NULL AS has_video,
-              s.name AS stream_name, s.url AS stream_url,
+              s.name AS stream_name, s.url AS stream_url, c.user_rating,
+              (SELECT m.score_breakdown FROM moments m WHERE m.id = c.moment_id) AS score_breakdown,
               (SELECT row_to_json(pp) FROM (SELECT id, status, progress, youtube_video_id, publish_at, error FROM publications WHERE clip_id = c.id ORDER BY created_at DESC LIMIT 1) pp) AS publication
          FROM clips c LEFT JOIN streams s ON s.id = c.stream_id
         ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY c.created_at DESC LIMIT ${Math.min(300, Number(req.query.limit) || 100)}`,
@@ -378,7 +403,7 @@ export async function apiRoutes(app: FastifyInstance) {
     const id = idOf(req);
     const clip = await one(
       `SELECT c.*, s.name AS stream_name, s.url AS stream_url, s.kind AS stream_kind, s.options AS stream_options, se.title AS session_title,
-              m.peak_sec, m.transcript AS moment_transcript, m.detector, m.keywords,
+              m.peak_sec, m.transcript AS moment_transcript, m.detector, m.keywords, m.score_breakdown,
               (SELECT min(start_sec) FROM chunks WHERE session_id = c.session_id AND status <> 'purged') AS available_start,
               (SELECT max(end_sec) FROM chunks WHERE session_id = c.session_id AND status <> 'purged') AS available_end
          FROM clips c LEFT JOIN streams s ON s.id = c.stream_id LEFT JOIN sessions se ON se.id = c.session_id LEFT JOIN moments m ON m.id = c.moment_id

@@ -59,7 +59,7 @@ export async function ollamaJson(prompt: string, imagesB64: string[], schema: an
       model,
       stream: false,
       format: schema ? toJsonSchema(schema) : 'json',
-      options: { temperature, num_ctx: 16384, num_predict: 1500 },
+      options: { temperature, num_ctx: 16384, num_predict: 3000 }, // room for the per-moment evidence checklist
       keep_alive: '30m',
       messages: [{ role: 'user', content: prompt, ...(imagesB64.length ? { images: imagesB64 } : {}) }],
     }),

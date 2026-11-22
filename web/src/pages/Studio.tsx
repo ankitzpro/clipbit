@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, clipThumbUrl, clipVideoUrl, type ClipDetail, type ClipSummary, type Segment } from '../api';
 import { AiEditPanel } from './AiEdit';
 import { navigate, toast, useAction, usePoll } from '../hooks';
-import { Badge, Empty, PageHead, Progress, PublishDialog, Score, fmtDur, fmtTime, timeAgo } from '../ui';
+import { Badge, Empty, PageHead, Progress, PublishDialog, Score, ScoreWhy, Stars, fmtDur, fmtTime, timeAgo } from '../ui';
 
 export function Studio({ clipId }: { clipId?: string }) {
   return clipId ? <ClipEditor id={clipId} /> : <ClipBrowser />;
@@ -171,9 +171,11 @@ function ClipEditor({ id }: { id: string }) {
           </div>
           <div className="row gap center">
             <Badge status={clip.status} />
-            <Score value={clip.score} size={36} />
+            <Score value={clip.score} size={36} breakdown={clip.score_breakdown ?? null} />
+            <Stars value={clip.user_rating} onChange={(st) => act(() => api.post(`/api/clips/${clip.id}/rating`, { stars: st }), st ? `Rated ${st}★` : 'Rating cleared')} />
             <span className="muted small">{fmtDur(clip.duration)} · v{clip.version}</span>
           </div>
+          <ScoreWhy breakdown={clip.score_breakdown ?? null} />
           {clip.error && <div className="small warn">{clip.error}</div>}
           {clip.reject_reason && <div className="small muted">Rejected: {clip.reject_reason}</div>}
         </div>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, clipThumbUrl, clipVideoUrl, type ClipSummary } from '../api';
 import { navigate, useAction, usePoll } from '../hooks';
-import { Badge, Empty, Modal, PageHead, PublishDialog, Score, fmtDur, timeAgo } from '../ui';
+import { Badge, Empty, Modal, PageHead, PublishDialog, Score, ScoreWhy, Stars, fmtDur, timeAgo } from '../ui';
 import { ClipCard } from './Studio';
 
 export function Approval() {
@@ -11,6 +11,9 @@ export function Approval() {
   const [publish, setPublish] = useState<ClipSummary | null>(null);
   const { run } = useAction();
   const act = (fn: () => Promise<any>, msg: string) => run(async () => { await fn(); await reload(); }, msg);
+  // ★ rating while reviewing — teaches the scorer your taste
+  const rate = (c: ClipSummary, stars: number | null) =>
+    run(async () => { await api.post(`/api/clips/${c.id}/rating`, { stars }); setPreview((p) => (p && p.id === c.id ? { ...p, user_rating: stars } : p)); await reload(); }, stars ? `Rated ${stars}★` : 'Rating cleared');
   const reject = (c: ClipSummary) => {
     const reason = prompt('Why reject? (optional — teaches the AI your taste)');
     if (reason !== null) void act(() => api.post(`/api/clips/${c.id}/reject`, { reason }), 'Rejected');
@@ -62,7 +65,9 @@ export function Approval() {
           <div className="preview-modal">
             <div className="phone"><video src={clipVideoUrl(preview)} poster={clipThumbUrl(preview)} controls autoPlay playsInline loop /></div>
             <div className="col gap">
-              <div className="row gap"><Score value={preview.score} /><Badge status={preview.status} /><span className="muted small">{fmtDur(preview.duration)} · {preview.stream_name} · {timeAgo(preview.created_at)}</span></div>
+              <div className="row gap"><Score value={preview.score} breakdown={preview.score_breakdown ?? null} /><Badge status={preview.status} /><span className="muted small">{fmtDur(preview.duration)} · {preview.stream_name} · {timeAgo(preview.created_at)}</span></div>
+              <div className="row gap wrap"><span className="small muted">Your rating</span><Stars value={preview.user_rating} onChange={(st) => rate(preview, st)} size={22} /></div>
+              <ScoreWhy breakdown={preview.score_breakdown ?? null} />
               <p>{preview.description}</p>
               <div className="tags">{preview.hashtags.map((h) => <span key={h} className="tag">{h}</span>)}</div>
               <div className="row gap wrap">

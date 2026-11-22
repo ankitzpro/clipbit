@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, type Moment, type Stream } from '../api';
 import { navigate, useAction, usePoll } from '../hooks';
-import { Badge, Empty, PageHead, Score, fmtTime, timeAgo } from '../ui';
+import { Badge, Empty, PageHead, Score, ScoreWhy, Stars, fmtTime, timeAgo } from '../ui';
 
 const CATS = ['funny', 'action', 'unexpected', 'reaction', 'commentary', 'fail', 'win', 'close_call', 'other'];
 
@@ -16,6 +16,10 @@ export function Moments({ query }: { query: URLSearchParams }) {
   const { data: streams } = usePoll<Stream[]>('/api/streams', 0);
   const [open, setOpen] = useState<string | null>(null);
   const { run } = useAction();
+
+  // your own ★ rating teaches the scorer what you like (categories you rate high/low get nudged, best/worst go to the AI)
+  const rate = (m: Moment, stars: number | null) =>
+    run(async () => { await api.post(`/api/moments/${m.id}/rating`, { stars }); await reload(); }, stars ? `Rated ${stars}★` : 'Rating cleared');
 
   const makeClip = (m: Moment) =>
     run(async () => {
@@ -54,18 +58,22 @@ export function Moments({ query }: { query: URLSearchParams }) {
           {data.items.map((m) => (
             <div key={m.id} className={`card moment ${m.status === 'dismissed' ? 'dim' : ''}`}>
               <div className="row gap top">
-                <Score value={m.score} />
+                <Score value={m.score} breakdown={m.score_breakdown ?? null} />
                 <div className="grow">
                   <div className="row gap wrap">
                     <b className="moment-title">{m.title}</b>
                     {m.category && <span className="chip">{m.category}</span>}
                     {(m as any).mission && <a className="chip" href="#/missions">🎯 {(m as any).mission}</a>}
-                    <span className="chip ghost" title="Detector">{m.detector === 'gemini' ? 'AI' : 'signals'}</span>
+                    <span className="chip ghost" title="Detector">{m.detector === 'heuristic' ? 'signals' : m.detector === 'ollama' ? 'AI · local' : 'AI · Gemini'}</span>
                   </div>
                   <div className="muted small">
                     {m.stream_name} · {fmtTime(m.start_sec)}–{fmtTime(m.end_sec)} ({Math.round(m.end_sec - m.start_sec)}s) · {timeAgo(m.created_at)}
                   </div>
                   {m.description && <p className="desc">{m.description}</p>}
+                  <div className="row gap wrap" style={{ marginTop: 4 }}>
+                    <Stars value={m.user_rating} onChange={(st) => rate(m, st)} />
+                    <ScoreWhy breakdown={m.score_breakdown ?? null} />
+                  </div>
                   {open === m.id && (
                     <div className="transcript">
                       {m.transcript ? `“${m.transcript}”` : <span className="muted">No speech in this moment.</span>}

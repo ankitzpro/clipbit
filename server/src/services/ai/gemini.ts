@@ -114,12 +114,24 @@ export const momentSchema = {
           title: { type: 'STRING', description: 'catchy YouTube Shorts title, max 70 chars, no hashtags' },
           description: { type: 'STRING', description: 'one or two sentences: what happens and why it is entertaining' },
           category: { type: 'STRING', enum: [...CATEGORIES] },
-          viral_score: { type: 'INTEGER', description: '0-100 viral potential as a standalone Short' },
+          evidence: {
+            type: 'OBJECT',
+            description: 'honest checklist, each 0-3, judged ONLY from what you can see/hear in this clip',
+            properties: {
+              event: { type: 'INTEGER', description: '0 nothing happens (driving, walking, menus) · 1 minor · 2 clear event · 3 big event (crash, kill, chase ends, epic fail/win)' },
+              novelty: { type: 'INTEGER', description: '0 routine gameplay · 1 slightly unusual · 2 surprising · 3 wild / never seen' },
+              payoff: { type: 'INTEGER', description: '0 no result shown · 1 partial · 2 result shown · 3 strong punchline/result inside the clip' },
+              reaction: { type: 'INTEGER', description: '0 silent / calm · 1 mild comment · 2 clear reaction · 3 laughing, screaming, shocked' },
+              standalone: { type: 'INTEGER', description: '0 confusing without context · 3 a stranger instantly gets it' },
+            },
+            required: ['event', 'novelty', 'payoff', 'reaction', 'standalone'],
+          },
+          viral_score: { type: 'INTEGER', description: 'your overall 0-100 guess (used only for comparison)' },
           hashtags: { type: 'ARRAY', items: { type: 'STRING' } },
           keywords: { type: 'ARRAY', items: { type: 'STRING' }, description: '1-4 spoken words worth highlighting in captions' },
           transcript_excerpt: { type: 'STRING' },
         },
-        required: ['start_sec', 'end_sec', 'peak_sec', 'title', 'description', 'category', 'viral_score', 'hashtags'],
+        required: ['start_sec', 'end_sec', 'peak_sec', 'title', 'description', 'category', 'evidence', 'hashtags'],
       },
     },
   },
@@ -137,7 +149,8 @@ const STYLE_TEXT: Record<string, string> = {
 
 export interface GeminiMomentRaw {
   start_sec: number; end_sec: number; peak_sec: number; title: string; description: string;
-  category: string; viral_score: number; hashtags: string[]; keywords?: string[]; transcript_excerpt?: string;
+  category: string; viral_score?: number; hashtags: string[]; keywords?: string[]; transcript_excerpt?: string;
+  evidence?: { event?: number; novelty?: number; payoff?: number; reaction?: number; standalone?: number };
 }
 
 export interface MomentArgs {
@@ -165,7 +178,7 @@ export function buildMomentPrompt(args: MomentArgs, media: { kind: 'video' } | {
   const peaks = args.signals.peaks.map((p) => `${rel(p.t).toFixed(0)}s (${p.kind}, strength ${p.strength})`).join(', ');
 
   const L = args.learning;
-  const learningText = L && L.totalReviewed > 0
+  const learningText = L && (L.totalReviewed > 0 || L.ratedExamples?.length)
     ? [
         `The creator has reviewed ${L.totalReviewed} clips so far.`,
         Object.keys(L.categoryApproval).length
@@ -173,6 +186,7 @@ export function buildMomentPrompt(args: MomentArgs, media: { kind: 'video' } | {
           : '',
         L.approvedExamples.length ? 'Examples the creator APPROVED: ' + L.approvedExamples.slice(0, 6).map((t) => `"${t}"`).join('; ') + '.' : '',
         L.rejectedExamples.length ? 'Examples the creator REJECTED: ' + L.rejectedExamples.slice(0, 6).map((r) => `"${r.title}"${r.reason ? ` (reason: ${r.reason})` : ''}`).join('; ') + '.' : '',
+        L.ratedExamples?.length ? 'The creator\'s own star ratings (1-5): ' + L.ratedExamples.map((r) => `"${r.title}" ${r.stars}★`).join('; ') + '.' : '',
         L.topPerformers.length ? 'Best performing published Shorts: ' + L.topPerformers.slice(0, 5).map((p) => `"${p.title}" ${p.views} views`).join('; ') + '.' : '',
         'Prefer moments similar to approved/top-performing ones and avoid ones like the rejected examples.',
       ].filter(Boolean).join('\n')
@@ -192,7 +206,7 @@ Rules:
 - All times are in seconds from the start of THIS segment (0 to ${Math.round(args.duration)}).
 - start_sec should include enough lead-in for a viewer with no context to understand the moment (usually 3-10s before the peak). end_sec should include the reaction/punchline and must not cut off a sentence.
 - Each clip must be ${args.clipMin}-${args.clipMax}s long. A moment may run past the end of this segment (end_sec up to ${Math.round(args.duration) + 20}) if the action clearly continues.
-- viral_score: 90+ only for genuinely exceptional moments; boring/filler segments should not be returned at all. Return an empty list if nothing is worth clipping.
+- evidence: answer each checklist item 0-3 honestly from what you actually see and hear — the score is computed from it, so do not inflate. Most gameplay is 0-1; reserve 3 for things a stranger would replay. Do not return segments where nothing happens at all. Return an empty list if nothing is worth clipping.
 - Titles must describe what actually happens (who/what/where), punchy, curiosity-driven, under 70 characters, may include one emoji, no hashtags, never a timestamp. Hashtags: 3-6, include the game.
 - keywords: 1-4 exact words spoken in the clip that deserve highlighted captions.
 

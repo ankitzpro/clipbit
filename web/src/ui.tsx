@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, type ClipSummary } from './api';
+import { api, type ClipSummary, type ScoreBreakdown } from './api';
 import { toast, useAction } from './hooks';
 
 export const fmtTime = (sec: number | null | undefined) => {
@@ -37,13 +37,30 @@ export function Badge({ status, children }: { status: string; children?: ReactNo
   );
 }
 
-export function Score({ value, size = 44 }: { value: number | null | undefined; size?: number }) {
+const EVIDENCE_LABEL: Record<keyof ScoreBreakdown['evidence'], string> = {
+  event: 'Clear event', novelty: 'Unusual', payoff: 'Payoff in clip', reaction: 'Reaction', standalone: 'Makes sense alone',
+};
+
+/** Multi-line explanation of an evidence-based score (also used as the badge tooltip). */
+export function explainScore(value: number | null | undefined, b?: ScoreBreakdown | null): string {
+  if (!b) return value == null ? 'Not rated' : `${value}/100 — old score: the AI's own guess (not evidence-based). Re-analyse the stream to get a real rating.`;
+  const lines = [`${value}/100 — evidence-based`];
+  for (const k of Object.keys(EVIDENCE_LABEL) as (keyof ScoreBreakdown['evidence'])[]) lines.push(`${'●'.repeat(b.evidence[k])}${'○'.repeat(3 - b.evidence[k])}  ${EVIDENCE_LABEL[k]}`);
+  lines.push(`Measured audio/visual spike: ${Math.round(b.signal * 100)}%  (+${b.signalPoints})`);
+  if (b.taste) lines.push(`Your ratings for "${b.taste.category}": ${b.taste.avgStars}★ avg over ${b.taste.n}  (${b.taste.points >= 0 ? '+' : ''}${b.taste.points})`);
+  for (const n of b.notes) lines.push(`Note: ${n}`);
+  if (b.aiGuess != null) lines.push(`(AI's own guess was ${b.aiGuess})`);
+  return lines.join('\n');
+}
+
+export function Score({ value, size = 44, breakdown }: { value: number | null | undefined; size?: number; breakdown?: ScoreBreakdown | null }) {
   const v = Math.max(0, Math.min(100, value ?? 0));
   const tone = v >= 80 ? 'var(--hot)' : v >= 60 ? 'var(--warm)' : 'var(--muted)';
   const r = size / 2 - 4;
   const c = 2 * Math.PI * r;
+  const legacy = value != null && breakdown === null;
   return (
-    <div className="score" style={{ width: size, height: size }} title={`Viral potential ${v}/100`}>
+    <div className={`score${legacy ? ' legacy' : ''}`} style={{ width: size, height: size }} title={explainScore(value, breakdown)}>
       <svg width={size} height={size}>
         <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--line)" strokeWidth="4" fill="none" />
         <circle cx={size / 2} cy={size / 2} r={r} stroke={tone} strokeWidth="4" fill="none" strokeDasharray={`${(v / 100) * c} ${c}`} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} />
@@ -99,6 +116,39 @@ export function Progress({ value }: { value: number }) {
     <div className="progress">
       <div style={{ width: `${Math.max(2, Math.min(100, value))}%` }} />
     </div>
+  );
+}
+
+/** 1-5 ★ rating. Click a star to rate, click the same star again to clear. */
+export function Stars({ value, onChange, size = 18, label = 'Your rating' }: { value: number | null | undefined; onChange: (stars: number | null) => void; size?: number; label?: string }) {
+  const [hover, setHover] = useState(0);
+  const shown = hover || value || 0;
+  return (
+    <span className="stars" role="radiogroup" aria-label={label} title={value ? `${label}: ${value}★ (click again to clear)` : `${label}: not rated`} onMouseLeave={() => setHover(0)}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n} type="button" role="radio" aria-checked={value === n} aria-label={`${n} star${n > 1 ? 's' : ''}`}
+          className={n <= shown ? 'on' : ''} style={{ fontSize: size }}
+          onMouseEnter={() => setHover(n)} onClick={(e) => { e.stopPropagation(); onChange(value === n ? null : n); }}
+        >★</button>
+      ))}
+    </span>
+  );
+}
+
+/** Compact one-line "why" under a moment: ●●○ per checklist item + spike. */
+export function ScoreWhy({ breakdown }: { breakdown?: ScoreBreakdown | null }) {
+  if (!breakdown) return <span className="muted small">old score (AI guess) — re-analyse for a real rating</span>;
+  const e = breakdown.evidence;
+  const item = (k: keyof ScoreBreakdown['evidence']) => (
+    <span key={k} className="why-item" title={EVIDENCE_LABEL[k]}>{EVIDENCE_LABEL[k]} <b>{'●'.repeat(e[k])}<span className="dimdot">{'●'.repeat(3 - e[k])}</span></b></span>
+  );
+  return (
+    <span className="score-why small">
+      {(Object.keys(EVIDENCE_LABEL) as (keyof ScoreBreakdown['evidence'])[]).map(item)}
+      <span className="why-item" title="Measured audio/visual spike inside the clip">Spike <b>{Math.round(breakdown.signal * 100)}%</b></span>
+      {breakdown.taste && <span className="why-item" title="Adjustment from your star ratings">Your taste <b>{breakdown.taste.points >= 0 ? '+' : ''}{breakdown.taste.points}</b></span>}
+    </span>
   );
 }
 

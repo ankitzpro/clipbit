@@ -50,7 +50,7 @@ export interface AppSettings {
 export const defaultSettings: AppSettings = {
   contentContext: 'GTA 6 gameplay live stream',
   styles: ['funny', 'action', 'unexpected', 'reactions'],
-  minScore: 55,
+  minScore: 35, // evidence-based scale (scoring.ts): routine ≈ 10-25, decent 35-60, great 75+
   autoClip: true,
   autoClipMinScore: 65,
   maxMomentsPerChunk: 2,

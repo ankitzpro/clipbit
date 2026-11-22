@@ -23,6 +23,7 @@ export interface MomentCandidate {
   keywords: string[];
   transcript: string;
   detector: 'gemini' | 'ollama' | 'heuristic';
+  breakdown?: import('./scoring.js').ScoreBreakdown; // why this score (evidence-based scoring)
 }
 
 export interface LearningProfile {
@@ -32,4 +33,8 @@ export interface LearningProfile {
   rejectedExamples: { title: string; reason?: string }[];
   topPerformers: { title: string; views: number; category?: string }[];
   categoryPerformance: Record<string, number>; // avg views per category
+  /** owner's star ratings per category (explicit ★, plus approve ≈ 4★ / reject ≈ 1.5★ when not rated) */
+  categoryStars?: Record<string, { avgStars: number; n: number }>;
+  /** best / worst rated moments, shown to the AI as taste examples */
+  ratedExamples?: { title: string; stars: number }[];
 }

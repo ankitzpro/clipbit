@@ -30,7 +30,7 @@ server/src
   config.ts          env vars (DATA_DIR, GEMINI_*, OLLAMA_*, GOOGLE_*, STORAGE_DRIVER, concurrency…)
   settings*.ts       runtime settings in Postgres `settings` table (key 'app'); defaults in settings-defaults.ts
   queues.ts          queues: ingest · analyze · render · upload · maintenance
-  db/migrations/     001_init · 002_edit_plan · 003_missions (applied automatically at start, advisory-locked)
+  db/migrations/     001_init … 005_ratings (applied automatically at start, advisory-locked)
   routes/api.ts      all REST endpoints
   workers/
     recorder.ts      yt-dlp → ffmpeg HLS → 60 s .ts chunks + segments.csv; reconnect/backoff; queues analyze jobs
@@ -44,6 +44,7 @@ server/src
     gemini.ts        REST client, prompts, moment schema, retired-model auto-switch, quota error class, health hook
     ollama.ts        local vision model via /api/chat with JSON-schema output; frames sent as ONE contact sheet
     editplan.ts      hook text, AI title, caption cleanup, highlight words, SFX cues (+ heuristic fallback)
+    scoring.ts       moment score = AI evidence checklist (0-3 ×5) + measured spikes + owner ★ taste (±12); stores score_breakdown
     signals.ts / heuristic.ts / boundaries.ts / transcribe.ts / types.ts
   services/video/
     render.ts        assemble range → dead-air cut → reframe → ASS captions+hook → loudnorm/SFX mix → intro/outro concat → x264
@@ -68,6 +69,8 @@ streams → sessions (one continuous recording) → chunks (60 s .ts files, tran
 - **No placeholder moments** ("Wild moment at 5:47"). `heuristicFallback` is off; if AI is unavailable/quota-limited,
   chunks are retried later (20 min, up to 24 h) instead of inventing moments.
 - Titles/hooks must describe what actually happens in the clip (the edit plan watches the clip before writing them).
+- Scores must be evidence-based, never the AI's raw 0-100 guess (it inflates everything to 90+). Scale: routine ≈ 10-25,
+  decent 35-60, great 75+; `minScore` default 35. Owner ★ ratings (moments/clips `user_rating`) feed `learning.ts`.
 - Clip length: min 20 s (owner request). Mission Shorts: 2–6 parts, target ~60 s, max 170 s.
 - Every stream requires an ownership/permission confirmation; no DRM/access-control bypassing.
 - No background music (copyright) unless the owner asks again.

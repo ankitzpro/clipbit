@@ -48,6 +48,7 @@ export interface Moment {
   id: string; stream_id: string; stream_name: string; stream_url: string | null; session_title: string | null; start_sec: number; end_sec: number; peak_sec: number | null;
   title: string; description: string | null; category: string | null; score: number; hashtags: string[]; keywords: string[]; transcript: string | null;
   detector: string; status: string; created_at: string; clip_id: string | null; clip_status: string | null;
+  score_breakdown?: ScoreBreakdown | null; user_rating?: number | null; mission?: string | null;
 }
 export interface Publication {
   id: string; clip_id: string; status: string; privacy: string; publish_at: string | null; title: string; description: string | null; tags: string[];
@@ -58,6 +59,7 @@ export interface ClipSummary {
   id: string; status: string; title: string; description: string | null; hashtags: string[]; score: number | null; category: string | null; duration: number | null;
   start_sec: number; end_sec: number; progress: number; error: string | null; created_at: string; updated_at: string; approved_at: string | null; version: number;
   has_thumb: boolean; has_video: boolean; kind?: 'single' | 'mission'; stream_name: string | null; stream_url: string | null; publication: Partial<Publication> | null;
+  score_breakdown?: ScoreBreakdown | null; user_rating?: number | null;
 }
 export interface Segment { start: number; end: number; text: string; words?: { start: number; end: number; word: string }[] }
 export interface ClipDetail extends ClipSummary {
@@ -74,3 +76,12 @@ export interface EditPlan {
 
 export const clipVideoUrl = (c: { id: string; version?: number; updated_at?: string }) => `/api/clips/${c.id}/video?v=${c.version ?? ''}-${c.updated_at ?? ''}`;
 export const clipThumbUrl = (c: { id: string; version?: number; updated_at?: string }) => `/api/clips/${c.id}/thumb?v=${c.version ?? ''}-${c.updated_at ?? ''}`;
+
+/** Why a moment got its score (server: services/ai/scoring.ts). */
+export interface ScoreBreakdown {
+  v: 1;
+  evidence: { event: number; novelty: number; payoff: number; reaction: number; standalone: number };
+  evidencePoints: number; signal: number; signalPoints: number; base: number;
+  taste?: { category: string; avgStars: number; n: number; points: number };
+  aiGuess?: number; notes: string[];
+}

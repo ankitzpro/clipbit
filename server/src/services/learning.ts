@@ -32,7 +32,28 @@ export async function getLearningProfile(force = false): Promise<LearningProfile
   const catViews: Record<string, number[]> = {};
   for (const p of perf) (catViews[p.category || 'other'] ||= []).push(Number(p.views));
 
+  // Owner's taste: explicit stars on a moment or its clip win; otherwise approve ≈ 4★, reject ≈ 1.5★.
+  const rated = await q<{ title: string; category: string | null; stars: number; explicit: boolean }>(
+    `SELECT COALESCE(c.title, m.title) AS title, COALESCE(m.category, c.category) AS category,
+            COALESCE(c.user_rating, m.user_rating,
+                     CASE WHEN c.status IN ('approved','published') THEN 4 WHEN c.status = 'rejected' THEN 1.5 END)::float AS stars,
+            (c.user_rating IS NOT NULL OR m.user_rating IS NOT NULL) AS explicit
+       FROM moments m FULL OUTER JOIN clips c ON c.moment_id = m.id
+      WHERE COALESCE(c.user_rating, m.user_rating) IS NOT NULL OR c.status IN ('approved','published','rejected')
+      ORDER BY COALESCE(c.updated_at, m.created_at) DESC LIMIT 500`,
+  );
+  const stars: Record<string, number[]> = {};
+  for (const r of rated) (stars[r.category || 'other'] ||= []).push(Number(r.stars));
+  const categoryStars = Object.fromEntries(
+    Object.entries(stars).map(([k, v]) => [k, { avgStars: v.reduce((a, b) => a + b, 0) / v.length, n: v.length }]),
+  );
+  const explicit = rated.filter((r) => r.explicit).sort((a, b) => b.stars - a.stars);
+  const ratedExamples = [...explicit.filter((r) => r.stars >= 4).slice(0, 4), ...explicit.filter((r) => r.stars <= 2).slice(-4)]
+    .map((r) => ({ title: r.title, stars: Number(r.stars) }));
+
   const value: LearningProfile = {
+    categoryStars,
+    ratedExamples,
     totalReviewed: rows.length,
     categoryApproval,
     approvedExamples: rows.filter((r) => r.status !== 'rejected').slice(0, 10).map((r) => r.title),
@@ -42,4 +63,9 @@ export async function getLearningProfile(force = false): Promise<LearningProfile
   };
   cache = { at: Date.now(), value };
   return value;
+}
+
+/** Forget the cached profile (after the owner rates or reviews something). Other processes refresh within 10 min. */
+export function invalidateLearningProfile() {
+  cache = null;
 }
