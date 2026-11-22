@@ -87,6 +87,7 @@ export async function apiRoutes(app: FastifyInstance) {
     q(`SELECT s.*,
          (SELECT count(*) FROM chunks c WHERE c.stream_id = s.id)::int AS chunk_count,
          (SELECT count(*) FROM chunks c WHERE c.stream_id = s.id AND c.status IN ('pending','analyzing'))::int AS pending_chunks,
+         (SELECT count(*) FROM chunks c WHERE c.stream_id = s.id AND c.status = 'analyzing')::int AS analyzing_chunks,
          (SELECT COALESCE(sum(c.end_sec - c.start_sec),0) FROM chunks c WHERE c.stream_id = s.id)::float AS recorded_seconds,
          (SELECT count(*) FROM moments m WHERE m.stream_id = s.id)::int AS moment_count,
          (SELECT count(*) FROM clips cl WHERE cl.stream_id = s.id)::int AS clip_count,
@@ -122,6 +123,49 @@ export async function apiRoutes(app: FastifyInstance) {
   });
 
   // raw file upload (application/octet-stream) of a recording you own
+  // ---------- videos already on this PC (read-only mount, imported in place — no upload/copy) ----------
+  const VIDEO_EXT = ['.mp4', '.mkv', '.mov', '.webm', '.ts', '.flv', '.avi', '.m4v'];
+  /** resolve a path relative to the local-videos root; refuses anything outside it */
+  const localPathOf = (rel: string) => {
+    const root = path.resolve(config.localVideos.root);
+    const abs = path.resolve(root, '.' + path.posix.normalize('/' + String(rel || '').replace(/\\/g, '/')));
+    if (abs !== root && !abs.startsWith(root + path.sep)) throw bad('path is outside the shared videos folder');
+    return { root, abs, rel: path.relative(root, abs).split(path.sep).join('/') };
+  };
+
+  app.get('/api/local-files', async (req: Req<unknown, { dir?: string }>) => {
+    const { root, abs, rel } = localPathOf(req.query.dir || '');
+    const rootOk = await fsp.stat(root).then((s) => s.isDirectory()).catch(() => false);
+    if (!rootOk) return { available: false, hostPath: config.localVideos.hostLabel, dir: '', entries: [] };
+    const names = await fsp.readdir(abs).catch(() => { throw notFound('folder not found'); });
+    const entries: { name: string; path: string; type: 'dir' | 'video'; size?: number; mtime?: string }[] = [];
+    for (const name of names) {
+      if (name.startsWith('.') || name.startsWith('$')) continue;
+      const st = await fsp.stat(path.join(abs, name)).catch(() => null);
+      if (!st) continue;
+      const p = rel ? `${rel}/${name}` : name;
+      if (st.isDirectory()) entries.push({ name, path: p, type: 'dir' });
+      else if (VIDEO_EXT.includes(path.extname(name).toLowerCase())) entries.push({ name, path: p, type: 'video', size: st.size, mtime: st.mtime.toISOString() });
+    }
+    entries.sort((a, b) => (a.type === b.type ? (a.type === 'video' ? (b.mtime || '').localeCompare(a.mtime || '') : a.name.localeCompare(b.name)) : a.type === 'dir' ? -1 : 1));
+    return { available: true, hostPath: config.localVideos.hostLabel, dir: rel, entries: entries.slice(0, 500) };
+  });
+
+  app.post('/api/streams/local', async (req: Req<{ path: string; name?: string; permissionConfirmed?: boolean }>) => {
+    if (!req.body?.permissionConfirmed) throw bad('Please confirm you own this recording or have permission to use it.');
+    const { abs, rel } = localPathOf(req.body.path);
+    if (!VIDEO_EXT.includes(path.extname(abs).toLowerCase())) throw bad('unsupported file type');
+    const st = await fsp.stat(abs).catch(() => null);
+    if (!st?.isFile() || st.size < 1000) throw bad('video file not found or empty');
+    const name = req.body.name?.trim() || path.basename(abs, path.extname(abs));
+    const row = await one(
+      `INSERT INTO streams (name, url, kind, status, permission_confirmed, source_title, options) VALUES ($1, NULL, 'file', 'processing', true, $2, $3) RETURNING *`,
+      [name.slice(0, 200), path.basename(abs), JSON.stringify({ localPath: abs, localName: rel })],
+    );
+    await queues.ingest.add('ingest', { streamId: row.id }, { jobId: `ingest-${row.id}-1` });
+    return row;
+  });
+
   app.post('/api/streams/upload', async (req: Req<NodeJS.ReadableStream, { name?: string; filename?: string; permission?: string }>) => {
     if (req.query.permission !== '1') throw bad('Please confirm you own this recording or have permission to use it.');
     const ext = (path.extname(req.query.filename || '') || '.mp4').toLowerCase();
@@ -175,6 +219,13 @@ export async function apiRoutes(app: FastifyInstance) {
     return { ok: true, requeuedChunks: failed.length };
   });
 
+  /** Re-rank this stream's moments against each other (services/ai/ranking.ts) — runs in the worker. */
+  app.post('/api/streams/:id/rank', async (req: Req) => {
+    const sessions = await q<{ id: string }>(`SELECT DISTINCT session_id AS id FROM moments WHERE stream_id = $1 AND score_breakdown IS NOT NULL`, [idOf(req)]);
+    for (const s of sessions) await queues.maintenance.add('rank-session', { sessionId: s.id }, { jobId: `rank-${s.id}-manual-${Date.now()}` });
+    return { ok: true, sessions: sessions.length };
+  });
+
   /** Throw away un-reviewed moments/clips and analyse the recorded footage again (e.g. after adding a Gemini key). */
   app.post('/api/streams/:id/reanalyze', async (req: Req) => {
     const id = idOf(req);
@@ -194,12 +245,20 @@ export async function apiRoutes(app: FastifyInstance) {
 
   app.delete('/api/streams/:id', async (req: Req) => {
     const id = idOf(req);
-    await q(`UPDATE streams SET paused = true WHERE id = $1`, [id]);
+    const s = await one<{ options: any }>(`UPDATE streams SET paused = true WHERE id = $1 RETURNING options`, [id]);
     const dir = path.join(config.dirs.recordings, id);
-    // give the recorder a moment to stop, then remove raw recordings + saved full recordings (rendered clips are kept)
+    // ClipBit's own copy of an uploaded file (never a local original under /local, which is read-only anyway)
+    const upload = s?.options?.uploadPath && path.resolve(s.options.uploadPath).startsWith(path.resolve(config.dirs.uploads) + path.sep)
+      ? s.options.uploadPath : null;
+    // stop a still-queued/running import of this stream (a running ffmpeg exits when its job's stream is gone)
+    for (const j of await queues.ingest.getJobs(['waiting', 'delayed', 'prioritized'])) if (j?.data?.streamId === id) await j.remove().catch(() => {});
+    // give the recorder a moment to stop, then remove raw recordings + saved full recordings + upload copy (rendered clips are kept)
     setTimeout(() => {
       void q(`DELETE FROM streams WHERE id = $1`, [id])
-        .then(() => Promise.all([fsp.rm(dir, { recursive: true, force: true }), deleteStreamRecordings(id)]))
+        .then(() => Promise.all([
+          fsp.rm(dir, { recursive: true, force: true }), deleteStreamRecordings(id),
+          upload ? fsp.rm(upload, { force: true }) : null,
+        ]))
         .catch(() => {});
     }, 12_000);
     return { ok: true };

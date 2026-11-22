@@ -29,6 +29,7 @@ export interface ScoreBreakdown {
   signalPoints: number;             // 0-15
   base: number;                     // evidencePoints + signalPoints
   taste?: { category: string; avgStars: number; n: number; points: number }; // owner's star-rating adjustment
+  audience?: { heat: number; points: number }; // YouTube "Most replayed" heat inside the clip (0..1), when available
   aiGuess?: number;                 // the AI's own 0-100 opinion, kept for comparison only
   notes: string[];                  // human-readable reasons for corrections
 }
@@ -73,6 +74,8 @@ export function computeScore(args: {
   category: string;
   aiGuess?: number;
   taste?: TasteStats;
+  /** YouTube "Most replayed" graph of the source video, session seconds */
+  heatmap?: { s: number; e: number; v: number }[] | null;
 }): { score: number; breakdown: ScoreBreakdown } {
   const notes: string[] = [];
   const e: Evidence = { event: 0, novelty: 0, payoff: 0, reaction: 0, standalone: 0 };
@@ -104,12 +107,18 @@ export function computeScore(args: {
   const signalPoints = sig.value * SIGNAL_WEIGHT * 100;
   const base = evidencePoints + signalPoints;
   const taste = tasteAdjustment(args.category, args.taste);
-  const score = Math.round(clamp(base + (taste?.points || 0), 0, 100));
+  // real audience (idea from openshorts' viewer-clip signal): the most-replayed part of the video earns up to +12
+  let audience: ScoreBreakdown["audience"];
+  if (args.heatmap?.length) {
+    const heat = Math.max(0, ...args.heatmap.filter((h) => h.e > args.start && h.s < args.end).map((h) => clamp(h.v, 0, 1)));
+    audience = { heat: Math.round(heat * 100) / 100, points: Math.round(heat * 12) };
+  }
+  const score = Math.round(clamp(base + (taste?.points || 0) + (audience?.points || 0), 0, 100));
   return {
     score,
     breakdown: {
       v: 1, evidence: e, evidencePoints: Math.round(evidencePoints), signal: Math.round(sig.value * 100) / 100,
-      signalPoints: Math.round(signalPoints), base: Math.round(base), taste,
+      signalPoints: Math.round(signalPoints), base: Math.round(base), taste, audience,
       aiGuess: Number.isFinite(args.aiGuess) ? Math.round(args.aiGuess as number) : undefined, notes,
     },
   };

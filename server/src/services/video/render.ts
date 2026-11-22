@@ -10,6 +10,7 @@ import type { Segment } from '../ai/types.js';
 import { assembleRange, thumbnail, type ChunkRef } from './media.js';
 import { applyCuts, detectSilences, isTrimmed, keepSegments, mapTime, mapTimeClamp, type KeepSegment } from './deadair.js';
 import { planReframe, OUT_H, OUT_W, type FacecamRect, type ReframeMode } from './reframe.js';
+import { audioBeats, pickBeats } from './punchin.js';
 import { buildAss, type CaptionStyle, type HookBanner } from './captions.js';
 
 export interface RenderOptions {
@@ -17,7 +18,7 @@ export interface RenderOptions {
   facecam?: FacecamRect | null;
   captions: { enabled: boolean } & CaptionStyle;
   deadAir: { enabled: boolean; minSilence: number; noiseDb: number };
-  video: { crf: number; preset: string; fps: number };
+  video: { crf: number; preset: string; fps: number; punchIn?: boolean };
   minDuration: number;
 }
 
@@ -73,7 +74,13 @@ export async function renderClip(inp: RenderInput): Promise<RenderOutput> {
   report(30);
 
   // 3) reframe plan (runs saliency analysis for smart mode)
-  const plan = await planReframe(src, info.width, info.height, o.reframeMode, workDir, o.facecam);
+  // punch-in beats (clip time): the moment's peak + audio leaps (services/video/punchin.ts, ported from openshorts)
+  let beats: number[] = [];
+  if (o.video.punchIn !== false && (o.reframeMode === 'smart' || o.reframeMode === 'center')) {
+    const peakRel = inp.peak !== undefined ? (trimmed ? mapTimeClamp(inp.peak - inp.start, keep) : inp.peak - inp.start) : null;
+    beats = pickBeats(peakRel, info.hasAudio ? await audioBeats(src) : [], info.duration);
+  }
+  const plan = await planReframe(src, info.width, info.height, o.reframeMode, workDir, o.facecam, beats, o.video.fps);
   report(40);
 
   // 4) captions + hook banner

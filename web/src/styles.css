@@ -252,3 +252,14 @@ label.btn { flex-direction: row; color: var(--text); font-size: 13px; }
 .score-why { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); }
 .score-why b { color: var(--text); letter-spacing: 1px; font-weight: 600; }
 .score-why .dimdot { color: var(--line); }
+
+/* Add stream → From this PC */
+.local-picker { display: flex; flex-direction: column; gap: 8px; }
+.local-list { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.local-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0;
+  border-bottom: 1px solid var(--line); padding: 8px 10px; color: var(--text); cursor: pointer; font: inherit; }
+.local-item:hover { background: var(--panel2); }
+.local-item.on { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+
+/* import / analysis progress on stream cards */
+.stream-progress { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }

@@ -43,10 +43,14 @@ const TS_AUDIO = new Set(['aac', 'mp3', 'mp2', 'ac3', 'eac3', 'opus']);
 export async function tsCodecArgs(input: string, chunkSec: number): Promise<{ args: string[]; transcoded: string[] }> {
   const p = await probe(input);
   const transcoded: string[] = [];
+  // when we must re-encode anyway, also cap at 1080p like every other source (VOD downloads, live recordings):
+  // a 4K60 AV1 file re-encoded at full size ran at 0.7x real time and ~9 GB/hour; Shorts are cut from a 1080-high crop
+  const downscale = p.height > 1080;
   const v = !p.videoCodec || TS_VIDEO.has(p.videoCodec)
     ? ['-c:v', 'copy']
-    : (transcoded.push(`video ${p.videoCodec}→h264`),
-      ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+    : (transcoded.push(`video ${p.videoCodec}→h264${downscale ? ` ${p.height}p→1080p` : ''}`),
+      [...(downscale ? ['-vf', 'scale=-2:1080:flags=lanczos'] : []),
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
         // keyframe on every chunk boundary so each chunk starts cleanly
         '-force_key_frames', `expr:gte(t,n_forced*${chunkSec})`,
         // the forced keyframe can land a hair before the boundary (timebase rounding); let the segmenter accept it
@@ -57,11 +61,49 @@ export async function tsCodecArgs(input: string, chunkSec: number): Promise<{ ar
   return { args: [...v, ...a], transcoded };
 }
 
-/** Split an existing file (VOD download / user upload) into chunks. */
-export async function segmentFile(input: string, dir: string, chunkSec: number) {
+export interface SegmentProgress {
+  phase: 'converting' | 'splitting'; // converting = re-encode (slow), splitting = stream copy (fast)
+  doneSec: number; totalSec: number; speed: number | null; note?: string;
+}
+
+/**
+ * Split an existing file (VOD download / user upload / local video) into chunks.
+ * onProgress: ffmpeg position every ~2 s. onTick: every 5 s while running — used to register finished chunks early,
+ * so analysis runs in parallel with a long conversion instead of after it.
+ */
+export async function segmentFile(
+  input: string, dir: string, chunkSec: number,
+  hooks: { onProgress?: (p: SegmentProgress) => void; onTick?: () => Promise<unknown> } = {},
+) {
   await fs.mkdir(dir, { recursive: true });
   const { args, transcoded } = await tsCodecArgs(input, chunkSec);
   if (transcoded.length) log.info(`re-encoding for chunking (${transcoded.join(', ')}) — slower than a copy: ${path.basename(input)}`);
-  await ffmpeg(['-i', input, ...segmentOutputArgs(dir, chunkSec, false, args)]);
+  const totalSec = (await probe(input).catch(() => null))?.duration || 0;
+  const phase = transcoded.length ? 'converting' : 'splitting';
+  hooks.onProgress?.({ phase, doneSec: 0, totalSec, speed: null, note: transcoded.join(', ') || undefined });
+  let ticking = false;
+  const timer = hooks.onTick
+    ? setInterval(() => {
+        if (ticking) return; // never overlap two registration passes
+        ticking = true;
+        void hooks.onTick!().catch(() => {}).finally(() => { ticking = false; });
+      }, 5000)
+    : undefined;
+  try {
+    await ffmpeg(['-stats', '-stats_period', '2', '-i', input, ...segmentOutputArgs(dir, chunkSec, false, args)], {
+      onStderr: (s) => {
+        const t = [...s.matchAll(/time=(\d+):(\d+):([\d.]+)/g)].pop();
+        if (!t) return;
+        const sp = [...s.matchAll(/speed=\s*([\d.]+)x/g)].pop();
+        hooks.onProgress?.({
+          phase, totalSec, note: transcoded.join(', ') || undefined,
+          doneSec: Number(t[1]) * 3600 + Number(t[2]) * 60 + Number(t[3]),
+          speed: sp ? Number(sp[1]) : null,
+        });
+      },
+    });
+  } finally {
+    if (timer) clearInterval(timer);
+  }
   return readSegmentList(dir);
 }

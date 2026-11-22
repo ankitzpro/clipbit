@@ -22,6 +22,11 @@ export const config = {
     uploads: path.join(dataDir, 'uploads'),
     cache: path.join(dataDir, 'cache'),
   },
+  /** read-only mount of videos already on the PC (docker-compose: LOCAL_VIDEOS_PATH → /local) */
+  localVideos: {
+    root: env.LOCAL_VIDEOS_DIR || '/local',
+    hostLabel: env.LOCAL_VIDEOS_PATH || 'D:/clipforge-data/import',
+  },
 
   ytdlpBin: env.YTDLP_BIN || 'yt-dlp',
   ffmpegBin: env.FFMPEG_BIN || 'ffmpeg',

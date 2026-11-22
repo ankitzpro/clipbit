@@ -42,7 +42,8 @@ export const api = {
 export interface Stream {
   id: string; name: string; url: string | null; kind: 'live' | 'channel' | 'vod' | 'file'; status: string; paused: boolean;
   source_title: string | null; last_error: string | null; last_checked_at: string | null; options: any;
-  chunk_count: number; pending_chunks: number; recorded_seconds: number; moment_count: number; clip_count: number; live_since: string | null; created_at: string;
+  chunk_count: number; pending_chunks: number; analyzing_chunks?: number; recorded_seconds: number; moment_count: number; clip_count: number; live_since: string | null; created_at: string;
+  ingest_progress?: { phase: string; pct: number | null; doneSec?: number; totalSec?: number; speed?: number | null; etaSec?: number | null; note?: string; at: string } | null;
 }
 export interface Moment {
   id: string; stream_id: string; stream_name: string; stream_url: string | null; session_title: string | null; start_sec: number; end_sec: number; peak_sec: number | null;
@@ -83,5 +84,7 @@ export interface ScoreBreakdown {
   evidence: { event: number; novelty: number; payoff: number; reaction: number; standalone: number };
   evidencePoints: number; signal: number; signalPoints: number; base: number;
   taste?: { category: string; avgStars: number; n: number; points: number };
+  audience?: { heat: number; points: number };
+  rank?: { position: number; of: number; points: number; reason?: string };
   aiGuess?: number; notes: string[];
 }

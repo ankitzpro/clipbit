@@ -122,7 +122,7 @@ export const momentSchema = {
               novelty: { type: 'INTEGER', description: '0 routine gameplay · 1 slightly unusual · 2 surprising · 3 wild / never seen' },
               payoff: { type: 'INTEGER', description: '0 no result shown · 1 partial · 2 result shown · 3 strong punchline/result inside the clip' },
               reaction: { type: 'INTEGER', description: '0 silent / calm · 1 mild comment · 2 clear reaction · 3 laughing, screaming, shocked' },
-              standalone: { type: 'INTEGER', description: '0 confusing without context · 3 a stranger instantly gets it' },
+              standalone: { type: 'INTEGER', description: '2-SECOND TEST: would the first 2 seconds make a stranger with no context keep watching? 0 no / confusing · 3 instantly hooked and gets it' },
             },
             required: ['event', 'novelty', 'payoff', 'reaction', 'standalone'],
           },
@@ -204,7 +204,7 @@ Look for: ${args.styles.map((s) => STYLE_TEXT[s] || s).join('; ')}. Also: epic k
 
 Rules:
 - All times are in seconds from the start of THIS segment (0 to ${Math.round(args.duration)}).
-- start_sec should include enough lead-in for a viewer with no context to understand the moment (usually 3-10s before the peak). end_sec should include the reaction/punchline and must not cut off a sentence.
+- start_sec: the shortest lead-in that still makes sense to a viewer with no context (usually 2-8s before the peak). The first 2 seconds must already be interesting (the 2-second test) — open on the action or the line, not on setup. end_sec should include the reaction/punchline and must not cut off a sentence.
 - Each clip must be ${args.clipMin}-${args.clipMax}s long. A moment may run past the end of this segment (end_sec up to ${Math.round(args.duration) + 20}) if the action clearly continues.
 - evidence: answer each checklist item 0-3 honestly from what you actually see and hear — the score is computed from it, so do not inflate. Most gameplay is 0-1; reserve 3 for things a stranger would replay. Do not return segments where nothing happens at all. Return an empty list if nothing is worth clipping.
 - Titles must describe what actually happens (who/what/where), punchy, curiosity-driven, under 70 characters, may include one emoji, no hashtags, never a timestamp. Hashtags: 3-6, include the game.

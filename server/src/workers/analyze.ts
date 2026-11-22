@@ -5,7 +5,8 @@ import { DelayedError, type Job } from 'bullmq';
 import { config } from '../config.js';
 import { one, q } from '../db/pool.js';
 import { logger, errMsg } from '../lib/log.js';
-import type { AnalyzeJob } from '../queues.js';
+import { queues, type AnalyzeJob } from '../queues.js';
+import { maybeRankSession } from '../services/ai/ranking.js';
 import { getSettings } from '../settings.js';
 import { extractAudioWav, loudnessPerSecond, readGrayFrames, activityPerSecond, makeAnalysisProxy } from '../services/video/media.js';
 import { transcribe } from '../services/ai/transcribe.js';
@@ -23,7 +24,7 @@ const log = logger('analyze');
 
 export async function processAnalyze(job: Job<AnalyzeJob>, token?: string) {
   const chunk = await one<any>(
-    `SELECT c.*, s.active AS session_active, st.name AS stream_name, st.kind AS stream_kind
+    `SELECT c.*, s.active AS session_active, s.heatmap AS session_heatmap, st.name AS stream_name, st.kind AS stream_kind
        FROM chunks c JOIN sessions s ON s.id = c.session_id JOIN streams st ON st.id = c.stream_id WHERE c.id = $1`,
     [job.data.chunkId],
   );
@@ -96,7 +97,7 @@ export async function processAnalyze(job: Job<AnalyzeJob>, token?: string) {
           // evidence-based: AI checklist + measured signals + the owner's star-rating taste (not the AI's own number)
           const { score: computed, breakdown } = computeScore({
             evidence: m.evidence, signals, transcript: ctxTranscript, start, end, category,
-            aiGuess: m.viral_score, taste: learning?.categoryStars,
+            aiGuess: m.viral_score, taste: learning?.categoryStars, heatmap: chunk.session_heatmap,
           });
           let score = computed;
           if (settings.styles.includes('viral_only')) score = Math.round(score * 0.95);
@@ -160,6 +161,10 @@ export async function processAnalyze(job: Job<AnalyzeJob>, token?: string) {
     await q(`UPDATE chunks SET status = 'analyzed' WHERE id = $1`, [chunk.id]);
     log.info(`chunk ${chunk.idx} of "${chunk.stream_name}": ${transcript.length} speech segments, ${signals.peaks.length} peaks, ${worthAsking && aiReady ? `analysed by ${provider || '?'}` : 'quiet (skipped AI)'}, mission "${mission || '-'}", ${created} new moments`);
     await maybeCompleteStream(chunk.stream_id, chunk.session_id);
+    // compare all moments of the session side by side once nothing is pending (live: every ~5 chunks)
+    await maybeRankSession(chunk.session_id, chunk.idx, (sessionId) =>
+      queues.maintenance.add('rank-session', { sessionId }, { jobId: `rank-${sessionId}-${chunk.id}`, delay: 15_000 }).then(() => undefined),
+    ).catch((e) => log.warn(`could not queue ranking: ${errMsg(e)}`));
   } catch (e) {
     if (e instanceof DelayedError) throw e;
     const final = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);

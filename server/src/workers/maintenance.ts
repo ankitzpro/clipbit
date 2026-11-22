@@ -8,6 +8,7 @@ import { getSettings } from '../settings.js';
 import { authedClient, getAccount } from '../services/youtube/client.js';
 import { getLearningProfile } from '../services/learning.js';
 import { saveRecording } from '../services/recordings.js';
+import { rankSession } from '../services/ai/ranking.js';
 
 const log = logger('maintenance');
 
@@ -15,6 +16,7 @@ export async function processMaintenance(job: Job) {
   if (job.name === 'stats') return refreshStats();
   if (job.name === 'cleanup') return cleanup();
   if (job.name === 'save-recording') return saveRecording(job.data.sessionId);
+  if (job.name === 'rank-session') return rankSession(job.data.sessionId);
 }
 
 export async function refreshStats() {

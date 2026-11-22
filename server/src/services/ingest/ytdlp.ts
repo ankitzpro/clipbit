@@ -31,6 +31,8 @@ export interface StreamInfo {
   duration?: number;
   webpageUrl: string;
   upcoming: boolean;
+  /** YouTube "Most replayed" graph, 0..1 per segment (absent on videos without enough views) */
+  heatmap?: { s: number; e: number; v: number }[];
 }
 
 /** For channel URLs, the /live suffix points at the current live broadcast (if any). */
@@ -70,6 +72,8 @@ export async function getInfo(url: string): Promise<StreamInfo> {
     id: j.id || '',
     duration: j.duration || undefined,
     webpageUrl: j.webpage_url || url,
+    // YouTube "Most replayed" graph (only on videos with enough views): [{s,e,v 0..1}]
+    heatmap: Array.isArray(j.heatmap) ? j.heatmap.map((h: any) => ({ s: Number(h.start_time), e: Number(h.end_time), v: Number(h.value) })).filter((h: any) => Number.isFinite(h.s) && Number.isFinite(h.v)) : undefined,
   };
 }
 

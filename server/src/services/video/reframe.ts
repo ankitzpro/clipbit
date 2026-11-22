@@ -7,6 +7,8 @@
  */
 import fs from 'node:fs/promises';
 import { readGrayFrames } from './media.js';
+import { probe } from '../../lib/proc.js';
+import { zoomExpr } from './punchin.js';
 
 export const OUT_W = 1080;
 export const OUT_H = 1920;
@@ -102,7 +104,13 @@ export interface ReframePlan {
   cmdFile?: string;
 }
 
-export async function planReframe(input: string, srcW: number, srcH: number, mode: ReframeMode, workDir: string, facecam?: FacecamRect | null): Promise<ReframePlan> {
+export async function planReframe(
+  input: string, srcW: number, srcH: number, mode: ReframeMode, workDir: string, facecam?: FacecamRect | null,
+  /** punch-in beat times (clip seconds) — smart/center only, see punchin.ts */
+  beats: number[] = [],
+  /** output frame rate (zoompan re-times frames, so it must run at the final rate) */
+  fps = 30,
+): Promise<ReframePlan> {
   const srcAspect = srcW / srcH;
   const target = OUT_W / OUT_H;
 
@@ -136,8 +144,14 @@ export async function planReframe(input: string, srcW: number, srcH: number, mod
   }
 
   const cropW = even(srcH * target);
-  if (mode === 'center') {
+  if (mode === 'center' && !beats.length) {
     return { graph: `[0:v]crop=${cropW}:ih:(iw-${cropW})/2:0,scale=${OUT_W}:${OUT_H}:flags=lanczos,setsar=1[vr]` };
+  }
+  const outFps = 10;
+  if (mode === 'center') {
+    // center crop that still punches in on beats: a fixed x path through the same sendcmd writer
+    const n = Math.ceil(((await probe(input)).duration || 0) * outFps) + 1;
+    return writeCropCommands(new Array(n).fill(Math.round((srcW - cropW) / 2)), cropW, srcW, srcH, outFps, beats, workDir, fps);
   }
 
   // smart
@@ -147,20 +161,28 @@ export async function planReframe(input: string, srcW: number, srcH: number, mod
   const g = await readGrayFrames(input, inFps, AW, AH);
   const scale = srcW / AW;
   const centersA = computeCropTrack(g.frames, AW, AH, cropW / scale);
-  const outFps = 10;
   const path = smoothCamera(centersA.map((c) => c * scale), inFps, outFps, srcW, cropW);
   const xs = path.map((c) => Math.round(Math.min(srcW - cropW, Math.max(0, c - cropW / 2))));
+  return writeCropCommands(xs, cropW, srcW, srcH, outFps, beats, workDir, fps);
+}
+
+/**
+ * sendcmd file for the camera path (fixed-size crop, x only — ffmpeg 5.1 drops frames if crop w/h change mid-stream),
+ * plus, on punch-in beats, a zoompan push evaluated per frame from the same smoothstep curve as punchin.ts.
+ * zoompan keeps a fixed 1080x1920 output, so it is safe on every ffmpeg version.
+ */
+async function writeCropCommands(xs: number[], cropW: number, srcW: number, srcH: number, outFps: number, beats: number[], workDir: string, fps: number): Promise<ReframePlan> {
   const x0 = xs[0] ?? Math.round((srcW - cropW) / 2);
-  const cmdFile = `${workDir}/crop.cmd`;
   const lines: string[] = [];
   let last = -1;
   xs.forEach((x, k) => {
     if (x !== last) lines.push(`${(k / outFps).toFixed(2)} crop x ${x};`);
     last = x;
   });
-  await fs.writeFile(cmdFile, lines.join('\n') + '\n');
+  await fs.writeFile(`${workDir}/crop.cmd`, (lines.length ? lines : [`0.00 crop x ${x0};`]).join('\n') + '\n');
+  const zoom = beats.length ? `,fps=${fps},zoompan=z='${zoomExpr(beats)}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${OUT_W}x${OUT_H}:fps=${fps}` : '';
   return {
-    graph: `[0:v]sendcmd=f=crop.cmd,crop=w=${cropW}:h=ih:x=${x0}:y=0,scale=${OUT_W}:${OUT_H}:flags=lanczos,setsar=1[vr]`,
-    cmdFile,
+    graph: `[0:v]sendcmd=f=crop.cmd,crop=w=${cropW}:h=ih:x=${x0}:y=0,scale=${OUT_W}:${OUT_H}:flags=lanczos${zoom},setsar=1[vr]`,
+    cmdFile: `${workDir}/crop.cmd`,
   };
 }

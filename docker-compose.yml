@@ -59,6 +59,9 @@ services:
     volumes:
       # recordings, rendered Shorts and thumbnails live on the host (default D:\clipforge-data)
       - ${DATA_PATH:-D:/clipforge-data}:/data
+      # videos on this PC to import in place, READ-ONLY (Add stream → "From this PC"). Point it at another folder with
+      # LOCAL_VIDEOS_PATH in .env (e.g. your OBS recordings folder); ClipBit never modifies or deletes these files.
+      - ${LOCAL_VIDEOS_PATH:-D:/clipforge-data/import}:/local:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -71,6 +74,7 @@ services:
     command: ["node", "server/dist/worker.js"]
     volumes:
       - ${DATA_PATH:-D:/clipforge-data}:/data
+      - ${LOCAL_VIDEOS_PATH:-D:/clipforge-data/import}:/local:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

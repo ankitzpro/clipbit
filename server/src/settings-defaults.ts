@@ -41,7 +41,7 @@ export interface AppSettings {
     sfxVolume: number; // 0..1
     maxSfx: number;
   };
-  video: { crf: number; preset: string; fps: number; blurBackground: boolean };
+  video: { crf: number; preset: string; fps: number; blurBackground: boolean; punchIn?: boolean };
   branding: { intro: { enabled: boolean; file: string }; outro: { enabled: boolean; file: string } };
   publish: { defaultPrivacy: 'private' | 'unlisted' | 'public'; appendShortsTag: boolean; defaultHashtags: string[]; categoryId: string };
   retention: { keepRecordingsHours: number };
@@ -80,7 +80,7 @@ export const defaultSettings: AppSettings = {
   },
   deadAir: { enabled: true, minSilence: 1.2, noiseDb: -38 },
   aiEdit: { hook: true, hookSeconds: 2.8, smartCaptions: true, sfx: true, sfxVolume: 0.55, maxSfx: 4 },
-  video: { crf: 20, preset: 'veryfast', fps: 30, blurBackground: true },
+  video: { crf: 20, preset: 'veryfast', fps: 30, blurBackground: true, punchIn: true }, // punchIn: small zoom on beats (smart/center framing)
   branding: { intro: { enabled: false, file: '' }, outro: { enabled: false, file: '' } },
   publish: { defaultPrivacy: 'private', appendShortsTag: true, defaultHashtags: ['#GTA6', '#Shorts', '#Gaming'], categoryId: '20' },
   retention: { keepRecordingsHours: 48 },

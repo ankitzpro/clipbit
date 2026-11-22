@@ -47,6 +47,8 @@ export function explainScore(value: number | null | undefined, b?: ScoreBreakdow
   const lines = [`${value}/100 — evidence-based`];
   for (const k of Object.keys(EVIDENCE_LABEL) as (keyof ScoreBreakdown['evidence'])[]) lines.push(`${'●'.repeat(b.evidence[k])}${'○'.repeat(3 - b.evidence[k])}  ${EVIDENCE_LABEL[k]}`);
   lines.push(`Measured audio/visual spike: ${Math.round(b.signal * 100)}%  (+${b.signalPoints})`);
+  if (b.audience) lines.push(`YouTube "Most replayed" heat: ${Math.round(b.audience.heat * 100)}%  (+${b.audience.points})`);
+  if (b.rank) lines.push(`Ranked #${b.rank.position} of ${b.rank.of} in this stream${b.rank.reason ? ` — ${b.rank.reason}` : ""}`);
   if (b.taste) lines.push(`Your ratings for "${b.taste.category}": ${b.taste.avgStars}★ avg over ${b.taste.n}  (${b.taste.points >= 0 ? '+' : ''}${b.taste.points})`);
   for (const n of b.notes) lines.push(`Note: ${n}`);
   if (b.aiGuess != null) lines.push(`(AI's own guess was ${b.aiGuess})`);
@@ -147,6 +149,8 @@ export function ScoreWhy({ breakdown }: { breakdown?: ScoreBreakdown | null }) {
     <span className="score-why small">
       {(Object.keys(EVIDENCE_LABEL) as (keyof ScoreBreakdown['evidence'])[]).map(item)}
       <span className="why-item" title="Measured audio/visual spike inside the clip">Spike <b>{Math.round(breakdown.signal * 100)}%</b></span>
+      {breakdown.rank && <span className="why-item" title="Compared with the other moments of this stream">Rank <b>#{breakdown.rank.position}/{breakdown.rank.of}</b></span>}
+      {breakdown.audience && <span className="why-item" title="YouTube Most replayed">Replayed <b>{Math.round(breakdown.audience.heat * 100)}%</b></span>}
       {breakdown.taste && <span className="why-item" title="Adjustment from your star ratings">Your taste <b>{breakdown.taste.points >= 0 ? '+' : ''}{breakdown.taste.points}</b></span>}
     </span>
   );

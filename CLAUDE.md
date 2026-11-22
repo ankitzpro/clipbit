@@ -30,11 +30,12 @@ server/src
   config.ts          env vars (DATA_DIR, GEMINI_*, OLLAMA_*, GOOGLE_*, STORAGE_DRIVER, concurrency…)
   settings*.ts       runtime settings in Postgres `settings` table (key 'app'); defaults in settings-defaults.ts
   queues.ts          queues: ingest · analyze · render · upload · maintenance
-  db/migrations/     001_init … 005_ratings (applied automatically at start, advisory-locked)
+  db/migrations/     001_init … 007_ingest_progress (applied automatically at start, advisory-locked)
   routes/api.ts      all REST endpoints
   workers/
     recorder.ts      yt-dlp → ffmpeg HLS → 60 s .ts chunks + segments.csv; reconnect/backoff; queues analyze jobs
-    ingest.ts        VOD download / uploaded file → chunks
+    ingest.ts        VOD download / uploaded / local file → chunks; writes streams.ingest_progress (phase, %, speed, ETA)
+                     and registers finished chunks every 5 s so analysis overlaps a long conversion
     analyze.ts       chunk → Whisper transcript + loudness/motion signals → AI moments (+ mission label)
     render.ts        clip (or multi-part mission Short) → AI edit plan → renderClip per part → concat → storage
     upload.ts        YouTube resumable upload (hard-gated on approval)
@@ -44,11 +45,15 @@ server/src
     gemini.ts        REST client, prompts, moment schema, retired-model auto-switch, quota error class, health hook
     ollama.ts        local vision model via /api/chat with JSON-schema output; frames sent as ONE contact sheet
     editplan.ts      hook text, AI title, caption cleanup, highlight words, SFX cues (+ heuristic fallback)
-    scoring.ts       moment score = AI evidence checklist (0-3 ×5) + measured spikes + owner ★ taste (±12); stores score_breakdown
+    scoring.ts       moment score = AI evidence checklist (0-3 ×5) + measured spikes + owner ★ taste (±12)
+                     + YouTube "Most replayed" heat (+12, VODs that have it); stores score_breakdown
+    ranking.ts       per-session comparative ranking (after the last chunk / every 5 live chunks): final = 55 % evidence
+                     + 45 % rank position (AI order, not its raw numbers). Idea from openshorts (MIT).
     signals.ts / heuristic.ts / boundaries.ts / transcribe.ts / types.ts
   services/video/
     render.ts        assemble range → dead-air cut → reframe → ASS captions+hook → loudnorm/SFX mix → intro/outro concat → x264
     reframe.ts       16:9→9:16: smart (motion-saliency virtual camera via sendcmd crop), blur, center, split(facecam)
+    punchin.ts       ~12 % zoom push on the moment peak + audio beats (smoothstep, ≥18 s apart) via zoompan; from openshorts
     captions.ts      animated word-highlight ASS + hook banner style
     deadair.ts, media.ts, sfx.ts (built-in synthesized SFX + user folder), branding.ts (intro/outro)
   services/youtube/client.ts  OAuth2 + encrypted tokens (AES-256-GCM with APP_SECRET)
@@ -103,6 +108,10 @@ streams → sessions (one continuous recording) → chunks (60 s .ts files, tran
 - Settings are cached 5 s in-process; `saveSettings` deep-merges partial objects.
 - Gemini schemas use OpenAPI-style uppercase types; `ollama.ts#toJsonSchema` converts them for Ollama.
 - On Windows `.bat` files must have CRLF line endings.
+- ffmpeg in the image is 5.1: changing crop w/h via sendcmd mid-stream silently DROPS all later frames — keep crop size
+  fixed and zoom with zoompan (fixed output size) instead.
+- "From this PC" import reads `${LOCAL_VIDEOS_PATH:-D:/clipforge-data/import}` mounted read-only at /local (stream kind
+  `file`, options.localPath). Only `options.uploadPath` copies are ever deleted.
 - Status/diagnostics endpoint: `GET /api/system` (gemini/ollama/whisper/yt-dlp/queues/ai_health).
 
 ## Status / next ideas

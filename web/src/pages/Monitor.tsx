@@ -32,7 +32,7 @@ export function Monitor() {
               <div key={s.id} className={`card stream ${live ? 'is-live' : ''}`}>
                 <div className="row gap">
                   <div className="grow">
-                    <div className="row gap"><Badge status={st} /><span className="muted small">{KIND_LABEL[s.kind]}</span></div>
+                    <div className="row gap"><Badge status={st} /><span className="muted small">{s.options?.localPath ? 'Video on this PC' : KIND_LABEL[s.kind]}</span></div>
                     <h3 className="ellipsis" title={s.name}>{s.name}</h3>
                     {s.source_title && s.source_title !== s.name && <div className="muted small ellipsis">{s.source_title}</div>}
                   </div>
@@ -43,12 +43,7 @@ export function Monitor() {
                   <div><b>{s.moment_count}</b><span>moments</span></div>
                   <div><b>{s.clip_count}</b><span>clips</span></div>
                 </div>
-                {s.pending_chunks > 0 && (
-                  <div className="small muted">
-                    Analysing {s.pending_chunks} chunk{s.pending_chunks > 1 ? 's' : ''}…
-                    <Progress value={s.chunk_count ? ((s.chunk_count - s.pending_chunks) / s.chunk_count) * 100 : 5} />
-                  </div>
-                )}
+                <StreamProgress s={s} />
                 {live && s.live_since && <div className="small muted">Recording since {timeAgo(s.live_since)}</div>}
                 {s.options?.saveFullRecording && <div className="small muted">🎞 Full recordings are saved as video files</div>}
                 {!live && s.last_checked_at && (s.kind === 'live' || s.kind === 'channel') && <div className="small muted">Last checked {timeAgo(s.last_checked_at)}</div>}
@@ -84,6 +79,53 @@ export function Monitor() {
       {adding && <AddStream onClose={() => setAdding(false)} onDone={reload} />}
       {editing && <StreamOptions stream={editing} onClose={() => setEditing(null)} onDone={reload} />}
       {recordingsOf && <Recordings stream={recordingsOf} onClose={() => setRecordingsOf(null)} />}
+    </>
+  );
+}
+
+const PHASE_LABEL: Record<string, string> = {
+  checking: 'Checking the video on YouTube…',
+  downloading: 'Downloading',
+  converting: 'Converting the video',
+  splitting: 'Splitting into pieces',
+};
+const mins = (sec: number) => (sec < 90 ? `${Math.max(1, Math.round(sec))} s` : `${Math.round(sec / 60)} min`);
+
+/** Import + analysis progress for one stream: phase, bar, position, speed, time left, and a stuck warning. */
+function StreamProgress({ s }: { s: Stream }) {
+  const p = s.ingest_progress;
+  const staleSec = p?.at ? (Date.now() - new Date(p.at).getTime()) / 1000 : 0;
+  const done = s.chunk_count - s.pending_chunks;
+  return (
+    <>
+      {p ? (
+        <div className="small stream-progress">
+          <div className="row gap">
+            <b>{PHASE_LABEL[p.phase] || p.phase}</b>
+            {p.pct != null && <span className="muted">{Math.floor(p.pct)}%</span>}
+            {p.etaSec != null && p.etaSec > 0 && <span className="muted grow" style={{ textAlign: 'right' }}>about {mins(p.etaSec)} left</span>}
+          </div>
+          <Progress value={p.pct ?? 3} />
+          <div className="muted">
+            {p.totalSec ? `${fmtTime(p.doneSec || 0)} of ${fmtTime(p.totalSec)}` : ''}
+            {p.speed ? ` · ${p.speed.toFixed(2)}× real time` : ''}
+            {p.note ? ` · ${p.note}` : ''}
+          </div>
+          {staleSec > 120 && <div className="warn">No progress for {mins(staleSec)} — it may be stuck (worker restarted or crashed).</div>}
+        </div>
+      ) : s.status === 'processing' && s.chunk_count === 0 ? (
+        <div className="small muted">⏳ Waiting to start (another import may be running)…</div>
+      ) : null}
+      {s.chunk_count > 0 && s.pending_chunks > 0 && (
+        <div className="small stream-progress">
+          <div className="row gap">
+            <b>Finding moments</b>
+            <span className="muted">{done} of {s.chunk_count} pieces done{s.analyzing_chunks ? ` · ${s.analyzing_chunks} in progress` : ''}</span>
+          </div>
+          <Progress value={(done / s.chunk_count) * 100} />
+          {p && <div className="muted">More pieces are added as the video is converted.</div>}
+        </div>
+      )}
     </>
   );
 }
@@ -160,8 +202,53 @@ function Recordings({ stream, onClose }: { stream: Stream; onClose: () => void }
   );
 }
 
+interface LocalListing {
+  available: boolean; hostPath: string; dir: string;
+  entries: { name: string; path: string; type: 'dir' | 'video'; size?: number; mtime?: string }[];
+}
+
+/** Browse the read-only shared videos folder and pick a file — it is analysed in place, no upload or copy. */
+function LocalVideoPicker({ value, onChange }: { value: string | null; onChange: (p: string | null) => void }) {
+  const [dir, setDir] = useState('');
+  const { data } = usePoll<LocalListing>(`/api/local-files?dir=${encodeURIComponent(dir)}`, 0);
+  const crumbs = dir ? dir.split('/') : [];
+  const hostRoot = (data?.hostPath || '').replace(/\//g, '\\').replace(/\\$/, '');
+  if (data && !data.available) {
+    return (
+      <div className="card small" style={{ padding: 12 }}>
+        The shared videos folder <b>{hostRoot}</b> doesn’t exist yet. Create it and put videos in it, or set
+        <code> LOCAL_VIDEOS_PATH</code> in <code>.env</code> to your recordings folder and restart ClipBit.
+      </div>
+    );
+  }
+  return (
+    <div className="local-picker">
+      <div className="row gap wrap small">
+        <button type="button" className="btn sm ghost" onClick={() => setDir('')}>📁 {hostRoot || 'Videos'}</button>
+        {crumbs.map((c, i) => (
+          <button key={i} type="button" className="btn sm ghost" onClick={() => setDir(crumbs.slice(0, i + 1).join('/'))}>› {c}</button>
+        ))}
+      </div>
+      <div className="local-list">
+        {!data ? <div className="muted small">Loading…</div> : data.entries.length === 0 ? (
+          <div className="muted small">No videos in this folder.</div>
+        ) : data.entries.map((e) => e.type === 'dir' ? (
+          <button key={e.path} type="button" className="local-item" onClick={() => setDir(e.path)}>📁 {e.name}</button>
+        ) : (
+          <button key={e.path} type="button" className={`local-item${value === e.path ? ' on' : ''}`} onClick={() => onChange(value === e.path ? null : e.path)}>
+            🎬 <span className="grow ellipsis">{e.name}</span>
+            <span className="muted small">{fmtSize(e.size ?? null)}{e.mtime ? ` · ${new Date(e.mtime).toLocaleDateString()}` : ''}</span>
+          </button>
+        ))}
+      </div>
+      <p className="muted small" style={{ margin: 0 }}>Read in place from your disk — no upload, and ClipBit never changes or deletes the original.</p>
+    </div>
+  );
+}
+
 function AddStream({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [tab, setTab] = useState<'url' | 'file'>('url');
+  const [tab, setTab] = useState<'url' | 'local' | 'file'>('url');
+  const [localFile, setLocalFile] = useState<string | null>(null);
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
   const [kind, setKind] = useState('auto');
@@ -174,6 +261,7 @@ function AddStream({ onClose, onDone }: { onClose: () => void; onDone: () => voi
   const submit = () =>
     run(async () => {
       if (tab === 'url') await api.post('/api/streams', { url, name, kind, permissionConfirmed: perm, options: saveFull ? { saveFullRecording: true } : {} });
+      else if (tab === 'local' && localFile) await api.post('/api/streams/local', { path: localFile, name, permissionConfirmed: perm });
       else if (file) await api.upload(file, name || file.name, setPct);
       toast('Stream added — monitoring started');
       onDone();
@@ -184,6 +272,7 @@ function AddStream({ onClose, onDone }: { onClose: () => void; onDone: () => voi
     <Modal title="Add a stream" onClose={onClose}>
       <div className="tabs">
         <button className={tab === 'url' ? 'on' : ''} onClick={() => setTab('url')}>YouTube URL</button>
+        <button className={tab === 'local' ? 'on' : ''} onClick={() => setTab('local')}>From this PC</button>
         <button className={tab === 'file' ? 'on' : ''} onClick={() => setTab('file')}>Upload recording</button>
       </div>
       <div className="form">
@@ -199,6 +288,8 @@ function AddStream({ onClose, onDone }: { onClose: () => void; onDone: () => voi
               </select>
             </label>
           </>
+        ) : tab === 'local' ? (
+          <LocalVideoPicker value={localFile} onChange={setLocalFile} />
         ) : (
           <label>Video file (mp4, mkv, mov, webm…)<input type="file" accept="video/*,.mkv,.ts,.flv" onChange={(e) => setFile(e.target.files?.[0] || null)} /></label>
         )}
@@ -218,7 +309,7 @@ function AddStream({ onClose, onDone }: { onClose: () => void; onDone: () => voi
         {pct !== null && <Progress value={pct} />}
         <div className="row end gap">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!perm || busy || (tab === 'url' ? !url.trim() : !file)} onClick={submit}>{busy ? (pct !== null ? `Uploading ${pct}%` : 'Checking…') : 'Start monitoring'}</button>
+          <button className="btn primary" disabled={!perm || busy || (tab === 'url' ? !url.trim() : tab === 'local' ? !localFile : !file)} onClick={submit}>{busy ? (pct !== null ? `Uploading ${pct}%` : 'Checking…') : 'Start monitoring'}</button>
         </div>
       </div>
     </Modal>

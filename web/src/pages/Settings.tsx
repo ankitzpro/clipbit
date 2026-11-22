@@ -145,6 +145,9 @@ export function Settings({ query }: { query: URLSearchParams }) {
             </select>
           </label>
           <label>Frame rate<select value={s.video.fps} onChange={(e) => num('video.fps', e.target.value)}><option value={30}>30</option><option value={60}>60</option></select></label>
+          <label className="check" title="A small 12% push-in on the key moment and on loud beats (smart/center framing), at most ~3 per minute">
+            <input type="checkbox" checked={s.video.punchIn !== false} onChange={(e) => set('video.punchIn', e.target.checked)} /> Punch-in zoom on big moments
+          </label>
           <label className="check"><input type="checkbox" checked={s.deadAir.enabled} onChange={(e) => set('deadAir.enabled', e.target.checked)} /> Remove dead air</label>
           <label>Silence longer than (s)<input type="number" step="0.1" min={0.6} max={5} value={s.deadAir.minSilence} onChange={(e) => num('deadAir.minSilence', e.target.value)} /></label>
           <label>Keep raw recordings (hours)<input type="number" min={1} max={720} value={s.retention.keepRecordingsHours} onChange={(e) => num('retention.keepRecordingsHours', e.target.value)} /></label>
